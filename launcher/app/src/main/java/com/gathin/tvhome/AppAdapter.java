@@ -26,6 +26,7 @@ import android.view.ViewOutlineProvider;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.ImageView;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -178,6 +179,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final int dockSize;
     /** config dock_row: false makes the dock apps the first tiles of one plain grid (names shown, no empty slots). */
     private final boolean dockRow;
+    private final int dockScale;
     /** config always_show_names: the alpha of an unfocused tile's name (0 hides it). */
     private final float restNameAlpha;
     /** cinematic_home: only then does a launch record the last-opened app the shelf uses. */
@@ -227,6 +229,8 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.rowsBelowDock = cfg.rowsBelowDock;
         this.dockTitle = cfg.dockTitle;
         this.dockRow = cfg.dockRow;
+        this.dockScale = Math.max(85, Math.min(110, ctx.getSharedPreferences(Config.SETTINGS_NAME,
+                Context.MODE_PRIVATE).getInt("dock_scale", 100)));
         this.restNameAlpha = cfg.alwaysShowNames ? 0.75f : 0f;
         this.cinematic = cfg.cinematicHome;
         this.launchActions = cfg.launchActions;
@@ -423,6 +427,15 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
         h.card.setVisibility(View.VISIBLE);
         h.card.setFocusable(true);
+        int scale = dockRow && position < dockSize ? dockScale : 100;
+        ViewGroup.LayoutParams cardParams = h.card.getLayoutParams();
+        cardParams.width = h.baseCardWidth * scale / 100;
+        cardParams.height = h.baseCardHeight * scale / 100;
+        h.card.setLayoutParams(cardParams);
+        FrameLayout.LayoutParams iconSize = (FrameLayout.LayoutParams) h.icon.getLayoutParams();
+        iconSize.width = h.baseIconSize * scale / 100;
+        iconSize.height = h.baseIconSize * scale / 100;
+        h.icon.setLayoutParams(iconSize);
         h.name.setText(e.name);
         // The dock has no labels, unless always_show_names asks for them (DockDecoration then makes room in the band).
         h.name.setVisibility(dockRow && position < dockSize && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
@@ -447,8 +460,13 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             h.banner.setVisibility(View.GONE);
             h.icon.setImageDrawable(e.icon);
             h.icon.setVisibility(View.VISIBLE);
+            // RBTV supplies only a square icon. Its app label under that icon crowds this five-app dock.
+            boolean iconOnly = "com.rblive.tv".equals(e.pkg);
+            FrameLayout.LayoutParams iconParams = (FrameLayout.LayoutParams) h.icon.getLayoutParams();
+            iconParams.bottomMargin = iconOnly ? 0 : Math.round(14 * ctx.getResources().getDisplayMetrics().density);
+            h.icon.setLayoutParams(iconParams);
             h.label.setText(e.label);
-            h.label.setVisibility(View.VISIBLE);
+            h.label.setVisibility(iconOnly ? View.GONE : View.VISIBLE);
         }
         h.card.setOnClickListener(v -> launch(e));
         h.card.setOnLongClickListener(v -> {
@@ -675,6 +693,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     static final class Holder extends RecyclerView.ViewHolder {
         final View card;
+        final int baseCardWidth, baseCardHeight, baseIconSize;
         /** item_app.xml's tile_bg: the dark card behind an icon tile, or behind a banner that has transparent parts. */
         final Drawable cardBackground;
         final ImageView banner;
@@ -695,6 +714,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             cardBackground = card.getBackground();
             banner = v.findViewById(R.id.banner);
             icon = v.findViewById(R.id.icon);
+            baseCardWidth = card.getLayoutParams().width;
+            baseCardHeight = card.getLayoutParams().height;
+            baseIconSize = icon.getLayoutParams().width;
             label = v.findViewById(R.id.label);
             name = v.findViewById(R.id.name);
             this.animations = animations;

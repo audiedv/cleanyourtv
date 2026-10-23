@@ -188,6 +188,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean shamsi;
     /** greeting_name: said after the greeting, which is shown in capitals. */
     private String greetingName = "";
+    private boolean personalHeaderEnabled;
+    private PersonalHeader personalHeader;
     /** Optional time-of-day backdrop (config.xml, sky_intensity); 0 keeps it hidden. */
     private SkyView sky;
     private String vpnApp;
@@ -344,6 +346,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (festive) updateWifiLabel();
             sky.update();
             wallpaperPlayer.update();
+            if (personalHeader != null) personalHeader.update();
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -445,6 +448,18 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         showStats = cfg.showStats;
         shamsi = cfg.shamsiDate;
         greetingName = cfg.greetingName;
+        personalHeaderEnabled = PersonalHeader.enabled(this) && !greetingName.isEmpty();
+        if (personalHeaderEnabled) {
+            personalHeader = new PersonalHeader(this, greetingName);
+            compactPill(findViewById(R.id.btnInputs));
+            compactPill(findViewById(R.id.btnWifi));
+            compactPill(findViewById(R.id.btnSettings));
+            View clockRow = findViewById(R.id.clockRow);
+            LinearLayout.LayoutParams clockParams = (LinearLayout.LayoutParams) clockRow.getLayoutParams();
+            clockParams.topMargin = (int) (-10 * density);
+            clockRow.setLayoutParams(clockParams);
+            findViewById(R.id.topButtons).setTranslationY(-24 * density);
+        }
         if (shamsi) {
             shamsiDate.setVisibility(View.VISIBLE);
             TextView date = findViewById(R.id.date);
@@ -540,6 +555,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // even when the theme requests an extra visible row below the dock.
             int shelfClearance = cfg.appLibrary ? hero.getMeasuredHeight() + (int) (40 * density) : 0;
             int want = Math.max(shelfClearance, h - dockRow - gridRows - (int) (AppAdapter.BOTTOM_ROOM_DP * density));
+            if (personalHeaderEnabled && rowsBelowDock == 0) want += (int) (50 * density);
             // Where the rows cannot fit even at the smallest tile (3 rows with the title on), the title keeps its
             // room above the dock and the last rows run off the bottom instead of the title drawing over the clock.
             if (MainActivity.this.dockRow && cfg.dockTitle && rowsBelowDock > 0) want = Math.max(want, (int) (AppAdapter.TITLE_ROOM_DP * density));
@@ -855,6 +871,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (showStats) startStats();
         sky.update();
         wallpaperPlayer.start();
+        if (personalHeader != null) personalHeader.start();
         handler.postDelayed(minuteTick, MINUTE_MS);
         if (festive && diya != null) {
             diya.start();
@@ -1024,6 +1041,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         root.removeCallbacks(showIdleClock);
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
+        if (personalHeader != null) personalHeader.stop();
         stopAmbientAnimation();
         hero.animate().cancel();
         ambient.animate().cancel();
@@ -1086,6 +1104,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onDestroy();
         unregisterReceiver(packageReceiver);
         wallpaperPlayer.close();
+        if (personalHeader != null) personalHeader.close();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.unregisterCallback(inputCallback);
@@ -1578,7 +1597,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private void showHero(int position, float dockTopInRoot) {
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
-        float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
+        float y = dockTopInRoot - (personalHeaderEnabled ? 20 : 40) * density - hero.getHeight();
         boolean changed = !label.contentEquals(heroName.getText());
         if (cinematic && heroArtAlpha > 0f) showHeroArt(position);
 
@@ -2246,6 +2265,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    private void compactPill(TextView pill) {
+        ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) pill.getLayoutParams();
+        params.height = (int) (36 * density);
+        params.setMarginStart((int) (7 * density));
+        pill.setLayoutParams(params);
+        pill.setPadding((int) (11 * density), 0, (int) (13 * density), 0);
+        pill.setCompoundDrawablePadding((int) (6 * density));
+        pill.setTextSize(13f);
+    }
+
     private void updateGreeting() {
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
         int res;
@@ -2279,7 +2308,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             greeting.setText(festiveGreeting);
             greeting.setTextColor(liftTowardsWhite(festival.accentColor(), 0.25f));
         } else {
-            greeting.setText(greetingName.isEmpty() ? getString(res)
+            greeting.setText(personalHeaderEnabled || greetingName.isEmpty() ? getString(res)
                     : getString(R.string.greeting_with_name, getString(res), greetingName));
             greeting.setTextColor(greetingColor);
         }

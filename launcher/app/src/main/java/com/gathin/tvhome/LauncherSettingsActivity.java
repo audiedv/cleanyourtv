@@ -7,7 +7,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.text.InputType;
 import android.view.View;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -27,6 +29,10 @@ public final class LauncherSettingsActivity extends Activity {
     private TextView animationsChoice;
     private TextView advancedChoice;
     private TextView followThemeChoice;
+    private TextView nameChoice, dateChoice, weatherChoice, dockSizeChoice, wallpaperTimerChoice;
+    private String personalName;
+    private boolean showDate, showWeather;
+    private int dockScale, onlineMinutes;
     private int columns;
     private int rowsBelowDock;
     private int dockOpacity;
@@ -50,6 +56,34 @@ public final class LauncherSettingsActivity extends Activity {
         dockOpacity = config.dockOpacity;
         animations = config.animations;
         advancedEffects = config.animations && config.advancedEffects;
+        personalName = config.greetingName;
+        showDate = choices.getBoolean("show_date", true);
+        showWeather = choices.getBoolean("show_weather", true);
+        dockScale = choices.getInt("dock_scale", 100);
+        onlineMinutes = choices.getInt("online_wallpaper_minutes", 60);
+        nameChoice = findViewById(R.id.nameChoice);
+        dateChoice = findViewById(R.id.dateChoice);
+        weatherChoice = findViewById(R.id.weatherChoice);
+        dockSizeChoice = findViewById(R.id.dockSizeChoice);
+        wallpaperTimerChoice = findViewById(R.id.wallpaperTimerChoice);
+        boolean personal = PersonalHeader.enabled(this);
+        nameChoice.setVisibility(personal ? View.VISIBLE : View.GONE);
+        dateChoice.setVisibility(personal ? View.VISIBLE : View.GONE);
+        weatherChoice.setVisibility(personal ? View.VISIBLE : View.GONE);
+        wallpaperTimerChoice.setVisibility(personal ? View.VISIBLE : View.GONE);
+        nameChoice.setOnClickListener(v -> editName());
+        dateChoice.setOnClickListener(v -> {
+            showDate = !showDate;
+            choices.edit().putBoolean("show_date", showDate).apply();
+            changed(); refresh();
+        });
+        weatherChoice.setOnClickListener(v -> {
+            showWeather = !showWeather;
+            choices.edit().putBoolean("show_weather", showWeather).apply();
+            changed(); refresh();
+        });
+        dockSizeChoice.setOnClickListener(v -> chooseDockSize());
+        wallpaperTimerChoice.setOnClickListener(v -> chooseWallpaperTimer());
 
         int[] ids = {R.id.columns4, R.id.columns5, R.id.columns6, R.id.columns7};
         for (int i = 0; i < ids.length; i++) {
@@ -123,13 +157,20 @@ public final class LauncherSettingsActivity extends Activity {
             if (!hasOnTvChoices()) return;
             choices.edit().remove("columns").remove(Config.ROWS_BELOW_DOCK_KEY).remove("animations")
                     .remove("advanced_effects").remove(Config.WALLPAPER_CHOICE_KEY)
-                    .remove(Config.DOCK_OPACITY_KEY).commit();
+                    .remove(Config.DOCK_OPACITY_KEY).remove("personal_name")
+                    .remove("show_date").remove("show_weather").remove("dock_scale")
+                    .remove("online_wallpaper_minutes").commit();
             Config current = Config.load(this);
             columns = current.columns;
             rowsBelowDock = current.rowsBelowDock;
             dockOpacity = current.dockOpacity;
             animations = current.animations;
             advancedEffects = current.animations && current.advancedEffects;
+            personalName = current.greetingName;
+            showDate = true;
+            showWeather = true;
+            dockScale = 100;
+            onlineMinutes = 60;
             changed();
             refresh();
         });
@@ -140,14 +181,58 @@ public final class LauncherSettingsActivity extends Activity {
         findViewById(R.id.tvSettingsChoice).setOnClickListener(v ->
                 open(SystemSettings.intent(this, Settings.ACTION_SETTINGS)));
         refresh();
-        if (config.launcherSettingsButton) reorderChoice.requestFocus();
-        else columnChoices[Math.max(0, Math.min(columns - 4, 3))].requestFocus();
+        if (personal) nameChoice.requestFocus();
+        else if (config.launcherSettingsButton) reorderChoice.requestFocus();
+        else dockSizeChoice.requestFocus();
     }
 
     private void reverseRow(TextView[] views) {
         LinearLayout row = (LinearLayout) views[0].getParent();
         row.removeAllViews();
         for (int i = views.length - 1; i >= 0; i--) row.addView(views[i]);
+    }
+
+    private void editName() {
+        EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        input.setText(personalName);
+        input.selectAll();
+        new AlertDialog.Builder(this).setTitle("Name on Home").setView(input)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    String value = input.getText().toString().trim();
+                    if (value.isEmpty()) return;
+                    personalName = value.length() > 24 ? value.substring(0, 24) : value;
+                    choices.edit().putString("personal_name", personalName).apply();
+                    changed(); refresh();
+                }).setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    private void chooseDockSize() {
+        final int[] values = {85, 100, 110};
+        final String[] labels = {"Compact (85%)", "Current (100%)", "Large (110%)"};
+        int selected = dockScale == 85 ? 0 : dockScale == 110 ? 2 : 1;
+        new AlertDialog.Builder(this).setTitle("Dock and icon size")
+                .setSingleChoiceItems(labels, selected, (dialog, which) -> {
+                    dialog.dismiss();
+                    dockScale = values[which];
+                    choices.edit().putInt("dock_scale", dockScale).apply();
+                    changed(); refresh();
+                }).setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    private void chooseWallpaperTimer() {
+        final int[] values = {15, 30, 60, 120, 240};
+        final String[] labels = {"15 minutes", "30 minutes", "1 hour", "2 hours", "4 hours"};
+        int selected = 2;
+        for (int i = 0; i < values.length; i++) if (onlineMinutes == values[i]) selected = i;
+        new AlertDialog.Builder(this).setTitle("Change online wallpaper")
+                .setSingleChoiceItems(labels, selected, (dialog, which) -> {
+                    dialog.dismiss();
+                    onlineMinutes = values[which];
+                    choices.edit().putInt("online_wallpaper_minutes", onlineMinutes).apply();
+                    changed(); refresh();
+                }).setNegativeButton(android.R.string.cancel, null).show();
     }
 
     private void showWallpaperPicker() {
@@ -232,13 +317,21 @@ public final class LauncherSettingsActivity extends Activity {
                 "none".equals(wallpaperCurrent) ? getString(R.string.wallpaper_none)
                         : wallpaperCurrent != null ? wallpaperCurrent
                         : getString(R.string.wallpaper_theme_default)));
+        nameChoice.setText(getString(R.string.personal_name_state, personalName));
+        dateChoice.setText(getString(R.string.date_state, getString(showDate ? R.string.on : R.string.off)));
+        weatherChoice.setText(getString(R.string.weather_state, getString(showWeather ? R.string.on : R.string.off)));
+        dockSizeChoice.setText(getString(R.string.dock_size_state, dockScale + "%"));
+        wallpaperTimerChoice.setText(getString(R.string.wallpaper_timer_state, onlineMinutes));
         followThemeChoice.setSelected(!hasOnTvChoices());
     }
 
     private boolean hasOnTvChoices() {
         return choices.contains("columns") || choices.contains(Config.ROWS_BELOW_DOCK_KEY)
                 || choices.contains("animations") || choices.contains("advanced_effects")
-                || choices.contains(Config.WALLPAPER_CHOICE_KEY) || choices.contains(Config.DOCK_OPACITY_KEY);
+                || choices.contains(Config.WALLPAPER_CHOICE_KEY) || choices.contains(Config.DOCK_OPACITY_KEY)
+                || choices.contains("personal_name") || choices.contains("show_date")
+                || choices.contains("show_weather") || choices.contains("dock_scale")
+                || choices.contains("online_wallpaper_minutes");
     }
 
     private void open(Intent intent) {

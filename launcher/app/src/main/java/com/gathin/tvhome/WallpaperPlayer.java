@@ -17,6 +17,13 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import org.json.JSONObject;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -43,6 +50,10 @@ final class WallpaperPlayer {
     /** config wallpaper_true_color: ARGB_8888 instead of RGB_565. */
     private final Bitmap.Config bitmapConfig;
     private final int height;
+    private final boolean online;
+    private final File temporaryImage;
+    private long onlineChanged;
+    private final long onlineInterval;
     /** wallpaper_dim as an ARGB black, painted into each picture once instead of a full-screen shade view. */
     private final int dimColor;
     /** The picture on screen, released once the next one has been drawn. */
@@ -64,6 +75,11 @@ final class WallpaperPlayer {
     WallpaperPlayer(Context context, FrameLayout root, Config config) {
         this.root = root;
         files = new ArrayList<>(config.wallpapers);
+        online = onlineEnabled(context);
+        int onlineMinutes = context.getSharedPreferences(Config.SETTINGS_NAME, Context.MODE_PRIVATE)
+                .getInt("online_wallpaper_minutes", 60);
+        onlineInterval = Math.max(15, Math.min(240, onlineMinutes)) * 60_000L;
+        temporaryImage = new File(context.getCacheDir(), "online-wallpaper.tmp");
         interval = config.wallpaperRotationMinutes * 60_000L;
         bitmapConfig = config.wallpaperTrueColor ? Bitmap.Config.ARGB_8888 : Bitmap.Config.RGB_565;
         // The dim is painted into the picture (decode), so no full-screen shade layer is drawn on every frame.
@@ -153,6 +169,10 @@ final class WallpaperPlayer {
     }
 
     void update() {
+        if (online) {
+            updateOnline();
+            return;
+        }
         if (!active || closed || loading || files.isEmpty()) return;
         String previous = preferences.getString("image", "");
         // A picture outside the time of day's group (the group changed) is replaced at once, not after the interval.
@@ -185,6 +205,69 @@ final class WallpaperPlayer {
                 if (!displayed.equals(previous) || changed == 0) {
                     preferences.edit().putString("image", displayed)
                             .putLong("changed", System.currentTimeMillis()).apply();
+                }
+            });
+        });
+    }
+
+    private static boolean onlineEnabled(Context context) {
+        try {
+            File config = new File(context.getExternalFilesDir(null), Config.FILE_NAME);
+            String value = new String(Files.readAllBytes(config.toPath()), StandardCharsets.UTF_8);
+            return new JSONObject(value).optBoolean("online_wallpaper", false);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /** Fetch only while Home is visible. Ruska stays on screen until a valid image is decoded. */
+    private void updateOnline() {
+        if (!active || closed || loading || System.currentTimeMillis() - onlineChanged < onlineInterval) return;
+        loading = true;
+        decoder.execute(() -> {
+            Bitmap bitmap = null;
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL("https://picsum.photos/1920/1080?random=" + System.currentTimeMillis());
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setConnectTimeout(8000);
+                connection.setReadTimeout(12000);
+                connection.setInstanceFollowRedirects(true);
+                connection.connect();
+                if (connection.getResponseCode() != 200 || connection.getContentLengthLong() > 8_000_000L) {
+                    throw new java.io.IOException("Image request failed or exceeded size limit");
+                }
+                try (InputStream input = connection.getInputStream();
+                     FileOutputStream output = new FileOutputStream(temporaryImage)) {
+                    byte[] buffer = new byte[8192];
+                    long size = 0;
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        size += count;
+                        if (size > 8_000_000L) throw new java.io.IOException("Image exceeded size limit");
+                        output.write(buffer, 0, count);
+                    }
+                }
+                bitmap = decode(temporaryImage, 0x99000000);
+            } catch (Exception failure) {
+                Log.w("TvHome.Wallpaper", "Online image unavailable", failure);
+            } finally {
+                if (connection != null) connection.disconnect();
+                if (temporaryImage.exists()) temporaryImage.delete();
+            }
+            Bitmap result = bitmap;
+            root.post(() -> {
+                loading = false;
+                if (closed || !active) {
+                    if (result != null) result.recycle();
+                    return;
+                }
+                if (result != null) {
+                    show(result);
+                    onlineChanged = System.currentTimeMillis();
+                } else {
+                    // Wait ten minutes before retrying an unavailable service or offline connection.
+                    onlineChanged = System.currentTimeMillis() - onlineInterval + 600_000L;
                 }
             });
         });
@@ -255,6 +338,10 @@ final class WallpaperPlayer {
     }
 
     private Bitmap decode(File file) {
+        return decode(file, dimColor);
+    }
+
+    private Bitmap decode(File file, int shade) {
         try {
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inJustDecodeBounds = true;
@@ -272,10 +359,10 @@ final class WallpaperPlayer {
                 options.inTargetDensity = scale[1];
             }
             options.inPreferredConfig = bitmapConfig;
-            options.inMutable = dimColor != 0;
+            options.inMutable = shade != 0;
             Bitmap decoded = BitmapFactory.decodeFile(file.getPath(), options);
             if (decoded == null) return null;
-            if (dimColor != 0) new Canvas(decoded).drawColor(dimColor);
+            if (shade != 0) new Canvas(decoded).drawColor(shade);
             // One copy in GPU memory instead of a software bitmap plus its texture; the decode stays off the UI
             // thread for rotations, and Home's return no longer uploads 4-8 MB to the GPU.
             Bitmap gpu = decoded.copy(Bitmap.Config.HARDWARE, false);
